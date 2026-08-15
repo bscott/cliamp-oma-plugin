@@ -5,6 +5,8 @@ terminal music player. See what's playing at a glance and control playback witho
 your workflow — works with the CLIAMP TUI and with `cliamp --daemon` alike. When Spotify or
 YouTube playback is detected, the widget follows and controls those too.
 
+![The CLIAMP widget's popup, showing the now-playing track, transport controls, and the source picker](preview.png)
+
 ## Features
 
 - **Now playing in the bar** — play/pause state glyph plus a scrolling title · artist label.
