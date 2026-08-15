@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "id": "io.github.bscott.cliamp",
+  "name": "CLIAMP",
+  "version": "1.0.0",
+  "author": "Brian Scott",
+  "license": "MIT",
+  "description": "Now-playing display and playback controls for the CLIAMP terminal music player",
+  "kinds": [
+    "service",
+    "bar-widget"
+  ],
+  "keepLoaded": true,
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "CLIAMP",
+    "description": "See what cliamp is playing and control playback from the bar.",
+    "category": "Media",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "refreshIntervalSec": 2,
+      "maxLabelWidth": 180,
+      "hideWhenUnavailable": false
+    },
+    "schema": [
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "description": "How often to poll cliamp for playback status.",
+        "min": 1,
+        "max": 60,
+        "step": 1,
+        "defaultValue": 2
+      },
+      {
+        "key": "maxLabelWidth",
+        "type": "integer",
+        "label": "Max label width (px)",
+        "description": "Width of the now-playing label before it scrolls.",
+        "min": 60,
+        "max": 600,
+        "step": 10,
+        "defaultValue": 180
+      },
+      {
+        "key": "hideWhenUnavailable",
+        "type": "boolean",
+        "label": "Hide when cliamp is not running",
+        "description": "Remove the widget from the bar entirely while no cliamp instance is reachable.",
+        "defaultValue": false
+      }
+    ]
+  }
+}
