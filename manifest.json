@@ -2,18 +2,19 @@
   "schemaVersion": 1,
   "id": "io.github.bscott.cliamp",
   "name": "CLIAMP",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "author": "Brian Scott",
   "license": "MIT",
-  "description": "Now-playing display and playback controls for the CLIAMP terminal music player, with Spotify and YouTube support when detected",
+  "description": "Now-playing display and playback controls for the CLIAMP terminal music player, with Spotify and YouTube support and a beat-reactive synthwave Party Mode for the bar",
   "kinds": [
     "service",
-    "bar-widget"
+    "bar-widget",
+    "overlay"
   ],
-  "keepLoaded": true,
   "entryPoints": {
     "service": "Service.qml",
-    "barWidget": "BarWidget.qml"
+    "barWidget": "BarWidget.qml",
+    "overlay": "Overlay.qml"
   },
   "barWidget": {
     "displayName": "CLIAMP",
@@ -24,7 +25,9 @@
     "defaults": {
       "refreshIntervalSec": 2,
       "maxLabelWidth": 180,
-      "hideWhenUnavailable": false
+      "hideWhenUnavailable": false,
+      "partyIntensity": 34,
+      "partyBars": true
     },
     "schema": [
       {
@@ -53,6 +56,30 @@
         "label": "Hide when cliamp is not running",
         "description": "Remove the widget from the bar entirely while no cliamp instance is reachable.",
         "defaultValue": false
+      },
+      {
+        "key": "partyIntensity",
+        "type": "integer",
+        "label": "Party Mode intensity (%)",
+        "description": "Strength of the synthwave wash painted over the bar in Party Mode.",
+        "min": 8,
+        "max": 60,
+        "step": 2,
+        "defaultValue": 34
+      },
+      {
+        "key": "partyBars",
+        "type": "boolean",
+        "label": "Party Mode style: spectrum bars",
+        "description": "On shows a cliamp-style spectrum analyser across the bar; off shows the scrolling synthwave gradient wash.",
+        "defaultValue": true
+      },
+      {
+        "key": "partyBeatReactive",
+        "type": "boolean",
+        "label": "Party Mode reacts to the beat",
+        "description": "Drive the effect from CLIAMP's real audio bands. When off, a calm animated wave is used instead.",
+        "defaultValue": true
       }
     ]
   }

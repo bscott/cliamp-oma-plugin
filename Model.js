@@ -70,6 +70,124 @@ function isYoutubePlayer(player) {
   return id.indexOf("youtube") !== -1
 }
 
+// -------------------------------------------------------------- party mode
+
+function _hexToRgb(hex) {
+  var h = String(hex || "").replace("#", "")
+  if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2]
+  if (h.length < 6) return { r: 200, g: 200, b: 200 }
+  return {
+    r: parseInt(h.substring(0, 2), 16),
+    g: parseInt(h.substring(2, 4), 16),
+    b: parseInt(h.substring(4, 6), 16)
+  }
+}
+
+function _rgbToHex(c) {
+  var to = function(n) {
+    var v = Math.round(Math.min(255, Math.max(0, n)))
+    var s = v.toString(16)
+    return s.length === 1 ? "0" + s : s
+  }
+  return "#" + to(c.r) + to(c.g) + to(c.b)
+}
+
+function _mix(a, b, t) {
+  return { r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t, b: a.b + (b.b - a.b) * t }
+}
+
+function _rgbToHsv(c) {
+  var r = c.r / 255, g = c.g / 255, b = c.b / 255
+  var max = Math.max(r, g, b), min = Math.min(r, g, b), d = max - min
+  var h = 0
+  if (d !== 0) {
+    if (max === r) h = ((g - b) / d) % 6
+    else if (max === g) h = (b - r) / d + 2
+    else h = (r - g) / d + 4
+    h *= 60
+    if (h < 0) h += 360
+  }
+  return { h: h, s: max === 0 ? 0 : d / max, v: max }
+}
+
+function _hsvToRgb(hsv) {
+  var h = ((hsv.h % 360) + 360) % 360, s = hsv.s, v = hsv.v
+  var c = v * s, x = c * (1 - Math.abs((h / 60) % 2 - 1)), m = v - c
+  var r = 0, g = 0, b = 0
+  if (h < 60) { r = c; g = x } else if (h < 120) { r = x; g = c }
+  else if (h < 180) { g = c; b = x } else if (h < 240) { g = x; b = c }
+  else if (h < 300) { r = x; b = c } else { r = c; b = x }
+  return { r: (r + m) * 255, g: (g + m) * 255, b: (b + m) * 255 }
+}
+
+function lerpColor(hexA, hexB, t) {
+  return _rgbToHex(_mix(_hexToRgb(hexA), _hexToRgb(hexB), Math.min(1, Math.max(0, t))))
+}
+
+// Samples an evenly-spaced list of hex colours at 0..1, interpolating between
+// neighbours. Used to colour the spectrum bars smoothly across the bar.
+function paletteAt(hexes, frac) {
+  if (!hexes || hexes.length === 0) return "#ffffff"
+  if (hexes.length === 1) return hexes[0]
+  var f = Math.min(1, Math.max(0, frac)) * (hexes.length - 1)
+  var i = Math.floor(f)
+  if (i >= hexes.length - 1) return hexes[hexes.length - 1]
+  return lerpColor(hexes[i], hexes[i + 1], f - i)
+}
+
+// Rotates a colour's hue by `deg` degrees. Driving all the wash stops with a
+// shared, slowly oscillating rotation makes the palette shimmer through the
+// neon family without leaving it.
+function rotateHue(hex, deg) {
+  var hsv = _rgbToHsv(_hexToRgb(hex))
+  hsv.h += deg
+  return _rgbToHex(_hsvToRgb(hsv))
+}
+
+function _hexFromHsv(h, s, v) {
+  return _rgbToHex(_hsvToRgb({ h: h, s: s, v: v }))
+}
+
+// Builds the neon gradient stops. The character is a fixed synthwave spread —
+// magenta, purple, electric blue, cyan — kept at forced-high saturation so it
+// always reads neon. The whole set is then rotated toward the active Omarchy
+// theme's accent hue (clamped to a modest range so it never wanders into muddy
+// yellows/greens), which both matches the theme and re-derives automatically
+// whenever the theme changes. A greyscale accent leaves the pure synthwave set.
+function synthwaveStops(accentHex) {
+  var hsv = _rgbToHsv(_hexToRgb(accentHex))
+  var baseHues = [320, 280, 235, 190] // magenta, purple, blue, cyan
+  var sats = [0.95, 0.90, 0.92, 0.95]
+  var rot = 0
+  if (hsv.s >= 0.18) {
+    var delta = hsv.h - 320
+    while (delta > 180) delta -= 360
+    while (delta < -180) delta += 360
+    rot = Math.max(-55, Math.min(55, delta))
+  }
+  var out = []
+  for (var i = 0; i < baseHues.length; i++) {
+    out.push(_hexFromHsv(baseHues[i] + rot, sats[i], 1.0))
+  }
+  return out
+}
+
+// Collapses a band frame from `cliamp visstream` into a single 0..1 level,
+// weighting the low bands so the pulse tracks the beat rather than hi-hats.
+function bandLevel(bands) {
+  if (!bands || typeof bands.length !== "number" || bands.length === 0) return 0
+  var weights = [1.0, 0.85, 0.7, 0.5, 0.35]
+  var sum = 0, wsum = 0
+  for (var i = 0; i < bands.length && i < weights.length; i++) {
+    var v = Number(bands[i])
+    if (!isFinite(v)) v = 0
+    sum += v * weights[i]
+    wsum += weights[i]
+  }
+  var level = wsum > 0 ? sum / wsum : 0
+  return Math.min(1, Math.max(0, level))
+}
+
 function sourceLabel(kind) {
   if (kind === "spotify") return "Spotify"
   if (kind === "youtube") return "YouTube"

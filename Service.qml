@@ -54,6 +54,75 @@ Item {
 
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 2, 1, 60)
 
+  // ------------------------------------------------------------- party mode
+
+  property bool partyMode: false
+  readonly property bool partyBeatReactive: boolSetting("partyBeatReactive", true)
+
+  // Effective intensity in 0..1. The popup's quick controls set a runtime
+  // override; when unset (-1) it follows the persisted setting.
+  property int _intensityOverride: -1
+  readonly property int partyIntensityPct: _intensityOverride >= 0
+    ? _intensityOverride : intSetting("partyIntensity", 34, 8, 60)
+  readonly property real partyIntensity: partyIntensityPct / 100
+
+  function bumpIntensity(deltaPct) {
+    _intensityOverride = Math.min(60, Math.max(8, partyIntensityPct + deltaPct))
+    return _intensityOverride
+  }
+
+  // Visual style: "bars" (cliamp-style spectrum analyser) or "gradient" (the
+  // scrolling synthwave wash). The popup can override the persisted setting at
+  // runtime.
+  property string _styleOverride: ""
+  readonly property string partyStyle: _styleOverride !== ""
+    ? _styleOverride : (boolSetting("partyBars", true) ? "bars" : "gradient")
+
+  function setStyle(s) {
+    if (s !== "bars" && s !== "gradient") return partyStyle
+    _styleOverride = s
+    return partyStyle
+  }
+
+  function toggleStyle() { return setStyle(partyStyle === "bars" ? "gradient" : "bars") }
+
+  // Smoothed 0..1 audio level driving the overall beat pulse, plus the smoothed
+  // per-band spectrum driving the visualizer bars. Both are fed by cliamp's
+  // band stream when it is the active playing source, and by a gentle synthetic
+  // wave otherwise so Spotify/YouTube still dance.
+  property real partyLevel: 0.35
+  property var bands: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+
+  // Smooths a fresh band frame into the running spectrum: fast attack so bars
+  // jump on transients, slower release so they fall away like a real analyser.
+  function pushBands(raw, expand) {
+    var out = []
+    for (var i = 0; i < raw.length; i++) {
+      var tgt = Number(raw[i])
+      if (!isFinite(tgt)) tgt = 0
+      tgt = Math.min(1, Math.max(0, tgt))
+      if (expand) tgt = Math.pow(tgt, 0.8)
+      var prev = i < bands.length ? Number(bands[i]) : 0
+      var k = tgt > prev ? 0.7 : 0.22
+      out.push(prev + (tgt - prev) * k)
+    }
+    bands = out
+  }
+
+  readonly property bool _beatFromCliamp: partyMode && partyBeatReactive
+    && activeSource === "cliamp" && playing
+
+  function toggleParty() { return setParty(!partyMode) }
+
+  function setParty(on) {
+    if (partyMode === on) return partyMode
+    partyMode = on
+    if (!shell) return partyMode
+    if (on) shell.summon("io.github.bscott.cliamp", "{}")
+    else shell.hide("io.github.bscott.cliamp")
+    return partyMode
+  }
+
   // ------------------------------------------------------------ MPRIS state
 
   readonly property var mprisPlayers: Mpris.players ? Mpris.players.values : []
@@ -165,6 +234,11 @@ Item {
     var n = parseInt(String(value === undefined || value === null ? fallback : value), 10)
     if (!isFinite(n)) n = fallback
     return Math.min(max, Math.max(min, n))
+  }
+
+  function boolSetting(name, fallback) {
+    var value = settings ? settings[name] : undefined
+    return value === undefined || value === null ? fallback : value === true
   }
 
   function refresh() {
@@ -328,7 +402,10 @@ Item {
       duration: nowDuration,
       index: activeSource === "cliamp" ? trackIndex : -1,
       total: activeSource === "cliamp" ? trackTotal : 0,
-      playlist: activeSource === "cliamp" ? playlist : ""
+      playlist: activeSource === "cliamp" ? playlist : "",
+      party: partyMode,
+      partyStyle: partyStyle,
+      partyIntensity: partyIntensityPct
     })
   }
 
@@ -376,6 +453,72 @@ Item {
     interval: 10000
     repeat: false
     onTriggered: if (statusProcess.running) statusProcess.running = false
+  }
+
+  // Streams cliamp's visualizer bands while Party Mode wants a live beat, and
+  // decays the level toward zero when the stream stops. `running` on a Process
+  // toggles the child process, so binding it to the beat condition starts and
+  // stops the stream automatically.
+  Process {
+    id: visstreamProcess
+    running: root._beatFromCliamp
+    command: ["cliamp", "visstream", "--fps", "30"]
+    stdout: SplitParser {
+      onRead: function(line) {
+        if (!root._beatFromCliamp) return
+        try {
+          var frame = JSON.parse(line)
+          if (!frame.bands) return
+          // Feed the real spectrum to the visualizer bars, and collapse it to
+          // an overall level for the gradient's beat pulse. Expanding the
+          // dynamic range makes quiet and loud read very differently.
+          root.pushBands(frame.bands, true)
+          var target = Math.min(1, Math.max(0, (Model.bandLevel(frame.bands) - 0.08) * 1.7))
+          var k = target > root.partyLevel ? 0.85 : 0.18
+          root.partyLevel = root.partyLevel + (target - root.partyLevel) * k
+        } catch (e) {
+          // Ignore partial or non-JSON lines.
+        }
+      }
+    }
+  }
+
+  // Synthetic spectrum for sources without real band data. cliamp gets the
+  // true analyser via visstream; Spotify and YouTube can't expose one over
+  // MPRIS, so while they play we animate a lively pseudo-spectrum that dances
+  // and settles to near-flat the moment playback pauses.
+  property real _wavePhase: 0
+  Timer {
+    interval: 45
+    repeat: true
+    running: root.partyMode && !root._beatFromCliamp
+    onTriggered: {
+      root._wavePhase += 0.09
+      var dancing = root.partyBeatReactive && root.nowPlaying
+      var gentle = !root.partyBeatReactive && root.nowPlaying
+      var out = []
+      for (var i = 0; i < 10; i++) {
+        var target
+        if (dancing) {
+          // Per-band oscillators at different rates plus a shared "kick"
+          // envelope give it a beat-like bounce, weighted toward the bass.
+          var osc = Math.abs(Math.sin(root._wavePhase * (0.8 + 0.28 * i) + i * 1.3))
+          var kick = Math.pow(0.5 + 0.5 * Math.sin(root._wavePhase * 1.7), 2)
+          var bass = 1.0 - i * 0.045
+          target = Math.min(1, Math.max(0, (0.2 + 0.7 * osc) * (0.45 + 0.75 * kick) * bass))
+        } else if (gentle) {
+          target = Math.min(1, Math.max(0, 0.32 + 0.24 * Math.sin(root._wavePhase + i * 0.5)))
+        } else {
+          target = 0.04
+        }
+        var prev = i < bands.length ? Number(bands[i]) : 0
+        var k = target > prev ? 0.5 : 0.16
+        out.push(prev + (target - prev) * k)
+      }
+      bands = out
+      var lvl = Model.bandLevel(out)
+      root.partyLevel = root.partyLevel + (lvl - root.partyLevel) * 0.3
+    }
   }
 
   // Wires each live player's metadata and play-state signals to the
@@ -470,6 +613,28 @@ Item {
 
     function source(kind: string): string {
       return root.selectSource(kind) ? "ok" : "unhandled"
+    }
+
+    function party(): string {
+      return root.toggleParty() ? "on" : "off"
+    }
+
+    function partyOn(): string {
+      root.setParty(true)
+      return "on"
+    }
+
+    function partyOff(): string {
+      root.setParty(false)
+      return "off"
+    }
+
+    function partyStyle(kind: string): string {
+      return root.setStyle(kind)
+    }
+
+    function partyStyleToggle(): string {
+      return root.toggleStyle()
     }
 
     function refresh(): string {

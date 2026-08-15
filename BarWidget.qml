@@ -323,6 +323,158 @@ BarWidget {
         visible: text !== ""
       }
 
+      // Party Mode toggle: washes the whole top bar in a beat-reactive
+      // synthwave gradient. Highlights while active.
+      BorderSurface {
+        id: partyToggle
+        readonly property bool on: root.cliamp ? root.cliamp.partyMode : false
+
+        width: parent.width
+        height: partyRow.implicitHeight + Style.space(12)
+        radius: Style.spacing.labelGap
+        color: on ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
+        borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
+
+        Row {
+          id: partyRow
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.leftMargin: partyToggle.borderLeft + Style.space(10)
+          anchors.rightMargin: partyToggle.borderRight + Style.space(10)
+          spacing: Style.space(10)
+
+          Text {
+            text: "󰓎"
+            color: partyToggle.on ? Color.accent : root.bar.foreground
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.body
+            width: Style.space(18)
+            horizontalAlignment: Text.AlignHCenter
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          Column {
+            width: parent.width - Style.space(80)
+            spacing: Style.space(1)
+            anchors.verticalCenter: parent.verticalCenter
+
+            Text {
+              text: "Party Mode"
+              color: root.bar.foreground
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: partyToggle.on
+            }
+
+            Text {
+              text: "Synthwave the top bar"
+              color: Qt.darker(root.bar.foreground, 1.5)
+              font.family: root.bar.fontFamily
+              font.pixelSize: Style.font.caption
+            }
+          }
+
+          Text {
+            text: partyToggle.on ? "ON" : "OFF"
+            color: partyToggle.on ? Color.accent : Qt.darker(root.bar.foreground, 1.5)
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            font.bold: partyToggle.on
+            width: Style.space(30)
+            horizontalAlignment: Text.AlignRight
+            anchors.verticalCenter: parent.verticalCenter
+          }
+        }
+
+        MouseArea {
+          anchors.fill: parent
+          hoverEnabled: true
+          cursorShape: Qt.PointingHandCursor
+          onClicked: if (root.cliamp) root.cliamp.toggleParty()
+        }
+      }
+
+      // Party Mode controls: pick the visual style and nudge the intensity.
+      // Revealed only while Party Mode is on.
+      Row {
+        width: parent.width
+        spacing: Style.space(8)
+        visible: root.cliamp ? root.cliamp.partyMode : false
+
+        // Style segmented control: Bars | Gradient.
+        Row {
+          spacing: 0
+
+          Repeater {
+            model: [{ k: "bars", label: "Bars" }, { k: "gradient", label: "Gradient" }]
+
+            BorderSurface {
+              id: styleSeg
+              required property var modelData
+              required property int index
+              readonly property bool sel: root.cliamp && root.cliamp.partyStyle === modelData.k
+
+              width: Style.space(64)
+              height: styleLabel.implicitHeight + Style.space(10)
+              radius: Style.spacing.labelGap
+              color: sel ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
+              borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
+
+              Text {
+                id: styleLabel
+                anchors.centerIn: parent
+                text: styleSeg.modelData.label
+                color: styleSeg.sel ? Color.accent : root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.caption
+                font.bold: styleSeg.sel
+              }
+
+              MouseArea {
+                anchors.fill: parent
+                cursorShape: Qt.PointingHandCursor
+                onClicked: if (root.cliamp) root.cliamp.setStyle(styleSeg.modelData.k)
+              }
+            }
+          }
+        }
+
+        Item { width: Style.space(4); height: 1 }
+
+        // Intensity stepper: −  NN%  +
+        Row {
+          spacing: Style.space(4)
+          anchors.verticalCenter: parent.verticalCenter
+
+          Button {
+            iconText: "󰍷"
+            foreground: root.bar.foreground
+            horizontalPadding: Style.spacing.controlPaddingX
+            verticalPadding: Style.spacing.controlPaddingY
+            onClicked: if (root.cliamp) root.cliamp.bumpIntensity(-4)
+          }
+
+          Text {
+            text: (root.cliamp ? root.cliamp.partyIntensityPct : 0) + "%"
+            color: root.bar.foreground
+            font.family: root.bar.fontFamily
+            font.pixelSize: Style.font.caption
+            width: Style.space(34)
+            horizontalAlignment: Text.AlignHCenter
+            anchors.verticalCenter: parent.verticalCenter
+          }
+
+          Button {
+            iconText: "󰐕"
+            foreground: root.bar.foreground
+            horizontalPadding: Style.spacing.controlPaddingX
+            verticalPadding: Style.spacing.controlPaddingY
+            onClicked: if (root.cliamp) root.cliamp.bumpIntensity(4)
+          }
+        }
+      }
+
       PanelSeparator {
         visible: root.sourceList.length > 1
         foreground: root.bar.foreground
