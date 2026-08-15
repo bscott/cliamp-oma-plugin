@@ -42,6 +42,46 @@ function parseStatus(raw) {
   }
 }
 
+// Extracts the xesam:url from an MPRIS player's metadata, the only reliable
+// way to tell a YouTube tab apart from any other media-playing browser tab.
+function mprisUrl(player) {
+  try {
+    var md = player ? player.metadata : null
+    return md ? String(md["xesam:url"] || "") : ""
+  } catch (e) {
+    return ""
+  }
+}
+
+function isSpotifyPlayer(player) {
+  if (!player) return false
+  var id = (String(player.desktopEntry || "") + " " + String(player.identity || "") + " "
+    + String(player.dbusName || "")).toLowerCase()
+  return id.indexOf("spotify") !== -1
+}
+
+// YouTube (including YouTube Music) usually plays inside a browser whose
+// MPRIS identity only names the browser, so match on the track URL first and
+// fall back to the identity for dedicated apps and PWAs.
+function isYoutubePlayer(player) {
+  if (!player) return false
+  if (/(\/\/|\.)(www\.|music\.|m\.)?(youtube\.com|youtu\.be)\//i.test(mprisUrl(player) + "/")) return true
+  var id = (String(player.identity || "") + " " + String(player.desktopEntry || "")).toLowerCase()
+  return id.indexOf("youtube") !== -1
+}
+
+function sourceLabel(kind) {
+  if (kind === "spotify") return "Spotify"
+  if (kind === "youtube") return "YouTube"
+  return "CLIAMP"
+}
+
+function sourceIcon(kind, isStream) {
+  if (kind === "spotify") return "󰓇"
+  if (kind === "youtube") return "󰗃"
+  return isStream ? "󰐻" : "󰝚"
+}
+
 // Formats a duration in seconds as m:ss, or h:mm:ss past the hour mark.
 function fmtTime(seconds) {
   var s = Math.max(0, Math.floor(Number(seconds) || 0))

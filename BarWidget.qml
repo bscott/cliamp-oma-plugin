@@ -7,17 +7,21 @@ import "Model.js" as Model
 // Bar entry for CLIAMP: a play-state glyph plus a scrolling now-playing
 // label. Left click toggles play/pause, middle click skips ahead, the wheel
 // moves through the playlist, and right click opens a popup with full track
-// details and transport controls.
+// details and transport controls. When Spotify or YouTube playback is
+// detected over MPRIS, the widget follows and controls whichever source is
+// active, with a picker in the popup.
 BarWidget {
   id: root
   moduleName: "io.github.bscott.cliamp"
 
   readonly property var cliamp: bar && bar.shell ? bar.shell.serviceFor(moduleName) : null
-  readonly property bool available: cliamp ? cliamp.available : false
-  readonly property bool playing: cliamp ? cliamp.playing : false
+  readonly property bool available: cliamp ? cliamp.anySource : false
+  readonly property bool playing: cliamp ? cliamp.nowPlaying : false
   readonly property bool hasTrack: cliamp ? cliamp.hasTrack : false
-  readonly property string title: cliamp ? cliamp.title : ""
-  readonly property string artist: cliamp ? cliamp.artist : ""
+  readonly property string title: cliamp ? cliamp.nowTitle : ""
+  readonly property string artist: cliamp ? cliamp.nowArtist : ""
+  readonly property string sourceKind: cliamp ? cliamp.activeSource : ""
+  readonly property var sourceList: cliamp ? cliamp.sources : []
 
   readonly property string playIcon: !available ? "󰝚" : (playing ? "󰏤" : "󰐊")
   readonly property real maxLabelWidth: setting("maxLabelWidth", 180)
@@ -110,7 +114,11 @@ BarWidget {
       else if (wheel.angleDelta.y < 0) root.cliamp.runAction("next", false)
     }
     onEntered: if (root.bar) root.bar.showTooltip(root,
-      root.available ? Model.summary(root.title, root.artist) : "cliamp is not running")
+      root.available
+        ? Model.summary(root.title, root.artist)
+          + (root.sourceKind !== "cliamp" && root.sourceKind !== ""
+            ? "  ·  " + Model.sourceLabel(root.sourceKind) : "")
+        : "No media source detected")
     onExited: if (root.bar) root.bar.hideTooltip(root)
   }
 
@@ -139,9 +147,20 @@ BarWidget {
           color: Style.normalFillFor(root.bar.foreground, Color.accent)
           borderSpec: Border.controlSpec("normal", root.bar.foreground, Color.accent)
 
+          Image {
+            id: artImage
+            anchors.fill: parent
+            anchors.margins: Style.space(2)
+            fillMode: Image.PreserveAspectCrop
+            asynchronous: true
+            source: root.cliamp ? root.cliamp.nowArtUrl : ""
+            visible: source !== "" && status === Image.Ready
+          }
+
           Text {
             anchors.centerIn: parent
-            text: root.cliamp && root.cliamp.isStream ? "󰐻" : "󰝚"
+            visible: !artImage.visible
+            text: Model.sourceIcon(root.sourceKind, root.cliamp && root.cliamp.nowIsStream)
             color: root.bar.foreground
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.displayLarge
@@ -156,7 +175,7 @@ BarWidget {
           Text {
             text: root.available
               ? (root.title || "Nothing playing")
-              : "cliamp is not running"
+              : "No media source detected"
             color: root.bar.foreground
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.subtitle
@@ -176,7 +195,7 @@ BarWidget {
           }
 
           Text {
-            text: root.cliamp && root.cliamp.album ? root.cliamp.album : ""
+            text: root.cliamp ? root.cliamp.nowAlbum : ""
             color: Qt.darker(root.bar.foreground, 1.6)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
@@ -188,11 +207,13 @@ BarWidget {
       }
 
       // Elapsed/total time with a slim progress bar for regular tracks, or a
-      // live badge with elapsed time for endless streams.
+      // live badge with elapsed time for endless streams. Hidden entirely for
+      // sources that report no timing data, like some browser players.
       Column {
         width: parent.width
         spacing: Style.space(4)
-        visible: root.hasTrack
+        visible: root.hasTrack && root.cliamp
+          && (root.cliamp.nowIsStream || root.cliamp.nowDuration > 0 || root.cliamp.nowPosition > 0)
 
         Item {
           width: parent.width
@@ -201,7 +222,7 @@ BarWidget {
           Text {
             id: positionText
             anchors.left: parent.left
-            text: root.cliamp ? Model.fmtTime(root.cliamp.position) : ""
+            text: root.cliamp ? Model.fmtTime(root.cliamp.nowPosition) : ""
             color: Qt.darker(root.bar.foreground, 1.3)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
@@ -209,14 +230,14 @@ BarWidget {
 
           Text {
             anchors.right: parent.right
-            text: root.cliamp && root.cliamp.isStream
+            text: root.cliamp && root.cliamp.nowIsStream
               ? "LIVE"
-              : (root.cliamp && root.cliamp.duration > 0 ? Model.fmtTime(root.cliamp.duration) : "")
-            color: root.cliamp && root.cliamp.isStream
+              : (root.cliamp && root.cliamp.nowDuration > 0 ? Model.fmtTime(root.cliamp.nowDuration) : "")
+            color: root.cliamp && root.cliamp.nowIsStream
               ? root.bar.foreground : Qt.darker(root.bar.foreground, 1.3)
             font.family: root.bar.fontFamily
             font.pixelSize: Style.font.caption
-            font.bold: root.cliamp && root.cliamp.isStream
+            font.bold: root.cliamp && root.cliamp.nowIsStream
           }
         }
 
@@ -225,14 +246,14 @@ BarWidget {
           height: Style.space(4)
           radius: height / 2
           color: Qt.darker(root.bar.foreground, 3.0)
-          visible: root.cliamp && !root.cliamp.isStream && root.cliamp.duration > 0
+          visible: root.cliamp && !root.cliamp.nowIsStream && root.cliamp.nowDuration > 0
 
           Rectangle {
             height: parent.height
             radius: parent.radius
             color: root.bar.foreground
-            width: root.cliamp && root.cliamp.duration > 0
-              ? parent.width * Math.min(1, root.cliamp.position / root.cliamp.duration)
+            width: root.cliamp && root.cliamp.nowDuration > 0
+              ? parent.width * Math.min(1, root.cliamp.nowPosition / root.cliamp.nowDuration)
               : 0
           }
         }
@@ -247,7 +268,7 @@ BarWidget {
           foreground: root.bar.foreground
           horizontalPadding: Style.spacing.controlPaddingX
           verticalPadding: Style.spacing.controlPaddingY
-          enabled: root.available
+          enabled: root.cliamp ? root.cliamp.canPrevious : false
           opacity: enabled ? 1.0 : 0.4
           onClicked: if (root.cliamp) root.cliamp.runAction("previous", false)
         }
@@ -268,7 +289,7 @@ BarWidget {
           foreground: root.bar.foreground
           horizontalPadding: Style.spacing.controlPaddingX
           verticalPadding: Style.spacing.controlPaddingY
-          enabled: root.available
+          enabled: root.cliamp ? root.cliamp.canNext : false
           opacity: enabled ? 1.0 : 0.4
           onClicked: if (root.cliamp) root.cliamp.runAction("next", false)
         }
@@ -287,7 +308,7 @@ BarWidget {
       Text {
         anchors.horizontalCenter: parent.horizontalCenter
         text: {
-          if (!root.cliamp || !root.available) return ""
+          if (!root.cliamp || root.sourceKind !== "cliamp") return ""
           var parts = []
           if (root.cliamp.trackTotal > 0 && root.cliamp.trackIndex >= 0)
             parts.push("Track " + (root.cliamp.trackIndex + 1) + " of " + root.cliamp.trackTotal)
@@ -300,6 +321,100 @@ BarWidget {
         elide: Text.ElideRight
         width: Math.min(implicitWidth, parent.width)
         visible: text !== ""
+      }
+
+      PanelSeparator {
+        visible: root.sourceList.length > 1
+        foreground: root.bar.foreground
+      }
+
+      // Picker shown when more than one source is detected. Clicking a row
+      // pins the widget to that source until it goes away.
+      Column {
+        id: sourcePicker
+        visible: root.sourceList.length > 1
+        width: parent.width
+        spacing: Style.space(4)
+
+        Repeater {
+          model: root.sourceList
+
+          BorderSurface {
+            id: sourceRow
+            required property var modelData
+
+            readonly property bool selected: root.sourceKind === modelData.kind
+
+            width: sourcePicker.width
+            height: sourceInner.implicitHeight + Style.space(10)
+            radius: Style.spacing.labelGap
+            color: selected ? Style.selectedFillFor(root.bar.foreground, Color.accent) : "transparent"
+            borderSpec: selected ? Border.controlSpec("normal", root.bar.foreground, Color.accent) : Border.none()
+
+            Row {
+              id: sourceInner
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+              anchors.leftMargin: sourceRow.borderLeft + Style.space(8)
+              anchors.rightMargin: sourceRow.borderRight + Style.space(8)
+              spacing: Style.space(8)
+
+              Text {
+                text: Model.sourceIcon(sourceRow.modelData.kind, false)
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.body
+                width: Style.space(18)
+                horizontalAlignment: Text.AlignHCenter
+                anchors.verticalCenter: parent.verticalCenter
+              }
+
+              Column {
+                width: parent.width - Style.space(52)
+                spacing: Style.space(1)
+                anchors.verticalCenter: parent.verticalCenter
+
+                Text {
+                  text: Model.sourceLabel(sourceRow.modelData.kind)
+                  color: root.bar.foreground
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  font.bold: sourceRow.selected
+                  elide: Text.ElideRight
+                  width: parent.width
+                }
+
+                Text {
+                  text: sourceRow.modelData.title
+                  color: Qt.darker(root.bar.foreground, 1.5)
+                  font.family: root.bar.fontFamily
+                  font.pixelSize: Style.font.caption
+                  elide: Text.ElideRight
+                  width: parent.width
+                  visible: text !== ""
+                }
+              }
+
+              Text {
+                text: sourceRow.modelData.playing ? "󰐊" : ""
+                color: root.bar.foreground
+                font.family: root.bar.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                width: Style.space(18)
+                horizontalAlignment: Text.AlignHCenter
+                anchors.verticalCenter: parent.verticalCenter
+              }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              hoverEnabled: true
+              cursorShape: Qt.PointingHandCursor
+              onClicked: if (root.cliamp) root.cliamp.selectSource(sourceRow.modelData.kind)
+            }
+          }
+        }
       }
 
       Text {

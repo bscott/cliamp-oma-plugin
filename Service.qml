@@ -1,13 +1,15 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import Quickshell.Services.Mpris
 import "Model.js" as Model
 
-// Headless singleton that owns all communication with cliamp. It polls
-// `cliamp status --json` on a timer, exposes the parsed playback state as
-// properties for the bar widget, and runs control commands. Keeping the
-// process handling here means every bar surface (one per monitor) reads the
-// same state instead of each spawning its own pollers.
+// Headless singleton that owns all communication with the media sources. It
+// polls `cliamp status --json` on a timer and runs cliamp control commands,
+// and it also watches the session's MPRIS players for Spotify and YouTube so
+// the widget can show and control whichever source is actually playing.
+// Keeping the process handling here means every bar surface (one per
+// monitor) reads the same state instead of each spawning its own pollers.
 Item {
   id: root
 
@@ -16,6 +18,8 @@ Item {
   // Inline widget settings, pushed in by the bar widget since the shell only
   // injects settings into widget slots, not services.
   property var settings: ({})
+
+  // ------------------------------------------------------------ cliamp state
 
   property bool installed: false
   property bool installChecked: false
@@ -48,8 +52,113 @@ Item {
   readonly property bool playing: _desired === -1
     ? playbackState === "playing" : _desired === 1
 
-  readonly property bool hasTrack: available && title !== ""
   readonly property int refreshIntervalSec: intSetting("refreshIntervalSec", 2, 1, 60)
+
+  // ------------------------------------------------------------ MPRIS state
+
+  readonly property var mprisPlayers: Mpris.players ? Mpris.players.values : []
+
+  // Detection reads player metadata through plain function calls, which QML
+  // cannot track, so metadata and play-state changes bump this revision to
+  // force the derived properties to recompute.
+  property int _mprisRev: 0
+
+  readonly property var spotifyPlayer: findPlayer("spotify", _mprisRev)
+  readonly property var youtubePlayer: findPlayer("youtube", _mprisRev)
+
+  function findPlayer(kind, rev) {
+    for (var i = 0; i < mprisPlayers.length; i++) {
+      var p = mprisPlayers[i]
+      if (kind === "spotify" ? Model.isSpotifyPlayer(p) : Model.isYoutubePlayer(p)) return p
+    }
+    return null
+  }
+
+  // --------------------------------------------------------- source routing
+
+  // The user's explicit source pin from the popup. Empty means auto-follow:
+  // whichever source is playing wins, in cliamp > Spotify > YouTube order.
+  property string preferredSource: ""
+
+  readonly property string activeSource: pickActive(_mprisRev, available, playing, preferredSource)
+
+  function pickActive() {
+    var detected = {
+      cliamp: available,
+      spotify: spotifyPlayer !== null,
+      youtube: youtubePlayer !== null
+    }
+    var playingNow = {
+      cliamp: available && playing,
+      spotify: !!(spotifyPlayer && spotifyPlayer.isPlaying),
+      youtube: !!(youtubePlayer && youtubePlayer.isPlaying)
+    }
+    if (preferredSource !== "" && detected[preferredSource]) return preferredSource
+    var order = ["cliamp", "spotify", "youtube"]
+    for (var i = 0; i < order.length; i++) if (playingNow[order[i]]) return order[i]
+    for (var j = 0; j < order.length; j++) if (detected[order[j]]) return order[j]
+    return ""
+  }
+
+  function selectSource(kind) {
+    if (kind !== "cliamp" && kind !== "spotify" && kind !== "youtube") return false
+    preferredSource = kind
+    return true
+  }
+
+  // Drop a stale pin once its source disappears, so the pin doesn't
+  // unexpectedly reassert itself when the source comes back later.
+  readonly property bool _preferredDetected: preferredSource === ""
+    || (preferredSource === "cliamp" ? available
+      : preferredSource === "spotify" ? spotifyPlayer !== null
+      : youtubePlayer !== null)
+  on_PreferredDetectedChanged: if (!_preferredDetected) preferredSource = ""
+
+  // ----------------------------------------------------- unified now-playing
+
+  readonly property var activePlayer: activeSource === "spotify" ? spotifyPlayer
+    : activeSource === "youtube" ? youtubePlayer : null
+  readonly property bool anySource: available || spotifyPlayer !== null || youtubePlayer !== null
+  readonly property bool nowPlaying: activeSource === "cliamp" ? playing
+    : !!(activePlayer && activePlayer.isPlaying)
+  readonly property string nowTitle: activeSource === "cliamp" ? title
+    : (activePlayer ? String(activePlayer.trackTitle || "") : "")
+  readonly property string nowArtist: activeSource === "cliamp" ? artist
+    : (activePlayer ? String(activePlayer.trackArtist || "") : "")
+  readonly property string nowAlbum: activeSource === "cliamp" ? album
+    : (activePlayer ? String(activePlayer.trackAlbum || "") : "")
+  readonly property string nowArtUrl: activePlayer ? String(activePlayer.trackArtUrl || "") : ""
+  readonly property bool nowIsStream: activeSource === "cliamp" && isStream
+  readonly property real nowPosition: activeSource === "cliamp" ? position
+    : (activePlayer && activePlayer.positionSupported ? activePlayer.position : 0)
+  readonly property real nowDuration: activeSource === "cliamp" ? duration
+    : (activePlayer && activePlayer.lengthSupported ? activePlayer.length : 0)
+  readonly property bool hasTrack: anySource && nowTitle !== ""
+  readonly property bool canNext: activeSource === "cliamp" ? available
+    : !!(activePlayer && activePlayer.canGoNext)
+  readonly property bool canPrevious: activeSource === "cliamp" ? available
+    : !!(activePlayer && activePlayer.canGoPrevious)
+
+  // Detected sources for the popup's picker, in routing priority order.
+  readonly property var sources: buildSources(_mprisRev, available, playing, title)
+
+  function buildSources() {
+    var list = []
+    if (available) list.push({ kind: "cliamp", title: title, playing: playing })
+    if (spotifyPlayer) list.push({
+      kind: "spotify",
+      title: String(spotifyPlayer.trackTitle || ""),
+      playing: !!spotifyPlayer.isPlaying
+    })
+    if (youtubePlayer) list.push({
+      kind: "youtube",
+      title: String(youtubePlayer.trackTitle || ""),
+      playing: !!youtubePlayer.isPlaying
+    })
+    return list
+  }
+
+  // ---------------------------------------------------------------- helpers
 
   function intSetting(name, fallback, min, max) {
     var value = settings ? settings[name] : undefined
@@ -117,10 +226,19 @@ Item {
     lastError = ""
   }
 
-  // Runs a playback control. Actions map directly onto cliamp CLI verbs;
-  // "playPause" becomes cliamp's `toggle`. Returns false when the action is
-  // unknown or cliamp is unreachable.
+  // ---------------------------------------------------------------- actions
+
+  // Runs a playback control against whichever source is active. Returns
+  // false when the action is unknown or no source is reachable.
   function runAction(action, showFeedback) {
+    if (activeSource === "cliamp") return runCliampAction(action, showFeedback)
+    if (activePlayer) return runMprisAction(activePlayer, action, showFeedback)
+    return false
+  }
+
+  // Maps actions onto cliamp CLI verbs; "playPause" becomes cliamp's
+  // `toggle`.
+  function runCliampAction(action, showFeedback) {
     if (!installed || !available) return false
 
     var verbs = {
@@ -134,6 +252,8 @@ Item {
     var verb = verbs[action]
     if (!verb) return false
 
+    var icon = actionIcon(action, playing)
+
     if (action === "playPause") _desired = playing ? 0 : 1
     else if (action === "play") _desired = 1
     else if (action === "pause" || action === "stop") _desired = 0
@@ -142,44 +262,77 @@ Item {
     actionProcess.command = ["cliamp", verb]
     actionProcess.running = true
 
-    if (showFeedback === true) {
-      var icons = {
-        playPause: playing ? "media-play" : "media-pause",
-        play: "media-play",
-        pause: "media-pause",
-        next: "media-next",
-        previous: "media-previous",
-        stop: "media-pause"
-      }
-      showOsd(icons[action] || "media")
-    }
+    if (showFeedback === true) showOsd(icon)
     return true
+  }
+
+  function runMprisAction(p, action, showFeedback) {
+    var icon = actionIcon(action, !!p.isPlaying)
+    var handled = false
+
+    if (action === "playPause") {
+      if (p.canTogglePlaying) { p.togglePlaying(); handled = true }
+      else if (p.isPlaying && p.canPause) { p.pause(); handled = true }
+      else if (!p.isPlaying && p.canPlay) { p.play(); handled = true }
+    } else if (action === "play") {
+      if (p.canPlay) { p.play(); handled = true }
+      else if (p.canTogglePlaying && !p.isPlaying) { p.togglePlaying(); handled = true }
+    } else if (action === "pause") {
+      if (p.canPause) { p.pause(); handled = true }
+      else if (p.canTogglePlaying && p.isPlaying) { p.togglePlaying(); handled = true }
+    } else if (action === "next") {
+      if (p.canGoNext) { p.next(); handled = true }
+    } else if (action === "previous") {
+      if (p.canGoPrevious) { p.previous(); handled = true }
+    } else if (action === "stop") {
+      if (p.canControl) { p.stop(); handled = true }
+      else if (p.canPause && p.isPlaying) { p.pause(); handled = true }
+    }
+
+    if (handled && showFeedback === true) showOsd(icon)
+    return handled
+  }
+
+  // OSD icon for an action, given whether the source was playing before the
+  // action ran.
+  function actionIcon(action, wasPlaying) {
+    if (action === "playPause") return wasPlaying ? "media-pause" : "media-play"
+    if (action === "play") return "media-play"
+    if (action === "next") return "media-next"
+    if (action === "previous") return "media-previous"
+    return "media-pause"
   }
 
   function showOsd(iconName) {
     if (!shell) return
     shell.summon("omarchy.osd", JSON.stringify({
       icon: iconName,
-      message: Model.summary(title, artist)
+      message: Model.summary(nowTitle, nowArtist)
     }))
   }
 
   function statusJson() {
+    var kinds = []
+    for (var i = 0; i < sources.length; i++) kinds.push(sources[i].kind)
     return JSON.stringify({
-      available: available,
-      state: playbackState,
-      playing: playing,
-      title: title,
-      artist: artist,
-      album: album,
-      stream: isStream,
-      position: position,
-      duration: duration,
-      index: trackIndex,
-      total: trackTotal,
-      playlist: playlist
+      available: anySource,
+      source: activeSource,
+      sources: kinds,
+      state: activeSource === "cliamp" ? playbackState : (nowPlaying ? "playing" : "paused"),
+      playing: nowPlaying,
+      title: nowTitle,
+      artist: nowArtist,
+      album: nowAlbum,
+      stream: nowIsStream,
+      position: nowPosition,
+      duration: nowDuration,
+      index: activeSource === "cliamp" ? trackIndex : -1,
+      total: activeSource === "cliamp" ? trackTotal : 0,
+      playlist: activeSource === "cliamp" ? playlist : ""
     })
   }
+
+  // ------------------------------------------------------- timers/processes
 
   Timer {
     id: refreshTimer
@@ -197,16 +350,21 @@ Item {
     onTriggered: root.refresh()
   }
 
-  // Advances the position locally between polls so the popup's progress bar
-  // moves smoothly. Every real poll resyncs to cliamp's reported position.
+  // Advances the popup's progress display between polls. cliamp positions
+  // tick locally and resync on every real poll; MPRIS players track position
+  // internally and just need their change signal poked to refresh bindings.
   Timer {
     interval: 1000
     repeat: true
-    running: root.available && root.playing
+    running: root.anySource && root.nowPlaying
     onTriggered: {
-      var next = root.position + 1
-      if (root.duration > 0 && next > root.duration) next = root.duration
-      root.position = next
+      if (root.activeSource === "cliamp") {
+        var next = root.position + 1
+        if (root.duration > 0 && next > root.duration) next = root.duration
+        root.position = next
+      } else if (root.activePlayer) {
+        root.activePlayer.positionChanged()
+      }
     }
   }
 
@@ -218,6 +376,18 @@ Item {
     interval: 10000
     repeat: false
     onTriggered: if (statusProcess.running) statusProcess.running = false
+  }
+
+  // Wires each live player's metadata and play-state signals to the
+  // revision counter driving source detection and routing.
+  Instantiator {
+    model: root.mprisPlayers
+    delegate: Connections {
+      required property var modelData
+      target: modelData
+      function onMetadataChanged() { root._mprisRev++ }
+      function onIsPlayingChanged() { root._mprisRev++ }
+    }
   }
 
   Process {
@@ -296,6 +466,10 @@ Item {
 
     function stop(): string {
       return root.runAction("stop", true) ? "ok" : "unhandled"
+    }
+
+    function source(kind: string): string {
+      return root.selectSource(kind) ? "ok" : "unhandled"
     }
 
     function refresh(): string {

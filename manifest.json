@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "io.github.bscott.cliamp",
   "name": "CLIAMP",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "author": "Brian Scott",
   "license": "MIT",
-  "description": "Now-playing display and playback controls for the CLIAMP terminal music player",
+  "description": "Now-playing display and playback controls for the CLIAMP terminal music player, with Spotify and YouTube support when detected",
   "kinds": [
     "service",
     "bar-widget"
