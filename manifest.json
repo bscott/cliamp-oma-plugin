@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.bscott.cliamp",
   "name": "CLIAMP",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "author": "Brian Scott",
   "license": "MIT",
   "description": "Now-playing display and playback controls for the CLIAMP terminal music player, with Spotify and YouTube support and a beat-reactive synthwave Party Mode for the bar",

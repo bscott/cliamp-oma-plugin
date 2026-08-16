@@ -149,7 +149,12 @@ Item {
   // whichever source is playing wins, in cliamp > Spotify > YouTube order.
   property string preferredSource: ""
 
-  readonly property string activeSource: pickActive(_mprisRev, available, playing, preferredSource)
+  // The source last controlled/played, so that after everything is paused the
+  // widget keeps showing it and a resume brings back that same source rather
+  // than jumping to the highest-priority detected one.
+  property string _resumeSource: ""
+
+  readonly property string activeSource: pickActive(_mprisRev, available, playing, preferredSource, _resumeSource)
 
   function pickActive() {
     var detected = {
@@ -165,9 +170,20 @@ Item {
     if (preferredSource !== "" && detected[preferredSource]) return preferredSource
     var order = ["cliamp", "spotify", "youtube"]
     for (var i = 0; i < order.length; i++) if (playingNow[order[i]]) return order[i]
+    // Nothing is playing: stay on the source we last controlled if it's still
+    // around, before falling back to priority order.
+    if (_resumeSource !== "" && detected[_resumeSource]) return _resumeSource
     for (var j = 0; j < order.length; j++) if (detected[order[j]]) return order[j]
     return ""
   }
+
+  // Remember the active source whenever something is actually playing, so the
+  // pause/resume fallback above targets the right one. Suppressed during a
+  // pause-all so the brief window where one source is still playing (while the
+  // others stop) can't overwrite the captured resume source.
+  property bool _suppressResumeTrack: false
+  onActiveSourceChanged: if (anyPlaying && !_suppressResumeTrack) _resumeSource = activeSource
+  onAnyPlayingChanged: if (!anyPlaying) _suppressResumeTrack = false
 
   function selectSource(kind) {
     if (kind !== "cliamp" && kind !== "spotify" && kind !== "youtube") return false
@@ -302,12 +318,72 @@ Item {
 
   // ---------------------------------------------------------------- actions
 
-  // Runs a playback control against whichever source is active. Returns
-  // false when the action is unknown or no source is reachable.
+  // True when more than one detected source is playing at the same time —
+  // e.g. cliamp and Spotify both producing audio.
+  readonly property int _playingCount: (available && playing ? 1 : 0)
+    + (spotifyPlayer && spotifyPlayer.isPlaying ? 1 : 0)
+    + (youtubePlayer && youtubePlayer.isPlaying ? 1 : 0)
+  readonly property bool anyPlaying: _playingCount > 0
+
+  // Pauses every source that is currently playing. Without this, pressing
+  // pause while two players run would pause only the active one and the widget
+  // would hop to the other still-playing source, so the audio never stops and
+  // the button looks broken.
+  function pauseAllPlaying() {
+    // Capture the source to resume before anything stops, and hold it against
+    // the staggered-pause transient.
+    _resumeSource = activeSource
+    _suppressResumeTrack = true
+    var handled = false
+    if (available && playing) {
+      _desired = 0
+      runCliampVerb("pause")
+      handled = true
+    }
+    var others = [spotifyPlayer, youtubePlayer]
+    for (var i = 0; i < others.length; i++) {
+      var p = others[i]
+      if (!p || !p.isPlaying) continue
+      if (p.canPause) { p.pause(); handled = true }
+      else if (p.canTogglePlaying) { p.togglePlaying(); handled = true }
+    }
+    return handled
+  }
+
+  // Resumes just the active/preferred source.
+  function playActive(showFeedback) {
+    if (activeSource === "cliamp") return runCliampAction("play", showFeedback)
+    if (activePlayer) return runMprisAction(activePlayer, "play", showFeedback)
+    return false
+  }
+
+  // Runs a playback control. Play/pause and pause act across every playing
+  // source so one press reliably stops the audio when several are going; the
+  // remaining actions target whichever source is active.
   function runAction(action, showFeedback) {
+    if (action === "pause") {
+      var pausedAny = pauseAllPlaying()
+      if (pausedAny && showFeedback === true) showOsd("media-pause")
+      return pausedAny
+    }
+    if (action === "playPause") {
+      if (anyPlaying) {
+        var paused = pauseAllPlaying()
+        if (paused && showFeedback === true) showOsd("media-pause")
+        return paused
+      }
+      return playActive(showFeedback)
+    }
     if (activeSource === "cliamp") return runCliampAction(action, showFeedback)
     if (activePlayer) return runMprisAction(activePlayer, action, showFeedback)
     return false
+  }
+
+  // Runs a bare cliamp CLI verb through the shared action process.
+  function runCliampVerb(verb) {
+    if (actionProcess.running) actionProcess.running = false
+    actionProcess.command = ["cliamp", verb]
+    actionProcess.running = true
   }
 
   // Maps actions onto cliamp CLI verbs; "playPause" becomes cliamp's
@@ -332,9 +408,7 @@ Item {
     else if (action === "play") _desired = 1
     else if (action === "pause" || action === "stop") _desired = 0
 
-    if (actionProcess.running) actionProcess.running = false
-    actionProcess.command = ["cliamp", verb]
-    actionProcess.running = true
+    runCliampVerb(verb)
 
     if (showFeedback === true) showOsd(icon)
     return true

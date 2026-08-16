@@ -78,15 +78,34 @@ BarWidget {
         font.family: root.bar.fontFamily
         font.pixelSize: Style.font.body
         anchors.verticalCenter: parent.verticalCenter
+        x: 0
 
-        property bool needsScroll: implicitWidth > scrollClip.width
+        readonly property bool needsScroll: implicitWidth > scrollClip.width
+        readonly property bool canScroll: needsScroll && !root.popupOpen && !root.bar.vertical
 
-        NumberAnimation on x {
-          running: labelText.needsScroll && !root.popupOpen && !root.bar.vertical
-          loops: Animation.Infinite
-          duration: Math.max(6000, labelText.implicitWidth * 25)
+        // Restart the marquee explicitly on any change that affects it, and
+        // park the label at x:0 when it should not scroll. A `running`-bound
+        // property-source animation can be left stopped when the text or width
+        // flickers — e.g. the active source briefly changing during a pause —
+        // and never resume; driving start/stop ourselves keeps it reliable.
+        function syncScroll() {
+          scrollAnim.stop()
+          labelText.x = 0
+          if (canScroll) scrollAnim.start()
+        }
+        onCanScrollChanged: syncScroll()
+        onTextChanged: syncScroll()
+        onImplicitWidthChanged: syncScroll()
+        Component.onCompleted: syncScroll()
+
+        NumberAnimation {
+          id: scrollAnim
+          target: labelText
+          property: "x"
           from: scrollClip.width
           to: -labelText.implicitWidth
+          duration: Math.max(6000, labelText.implicitWidth * 25)
+          loops: Animation.Infinite
           easing.type: Easing.Linear
         }
       }
